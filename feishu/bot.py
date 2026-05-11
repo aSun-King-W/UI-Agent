@@ -59,12 +59,12 @@ class FeishuBot:
         try:
             reply = self._message_handler(text, sender_id, chat_id)
             if reply:
-                self._send_text(chat_id, reply)
+                self.send_text(chat_id, reply)
         except Exception as e:
             logger.error(f"处理消息异常: {e}")
-            self._send_text(chat_id, f"处理出错: {str(e)}")
+            self.send_text(chat_id, f"处理出错: {str(e)}")
 
-    def _send_text(self, chat_id: str, text: str):
+    def send_text(self, chat_id: str, text: str):
         """发送文本消息到指定会话"""
         from lark_oapi import Client
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody

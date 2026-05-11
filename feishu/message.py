@@ -11,6 +11,31 @@ def build_text_message(text: str) -> str:
     return json.dumps({"text": text})
 
 
+def build_progress_message(step: int, status: str, detail: str = "") -> str:
+    """构造进度通知消息
+
+    Args:
+        step: 当前步骤序号（0 表示初始化/启动阶段）。
+        status: 状态标签，如 "启动" / "登录" / "搜索" / "筛选" / "加购" / "完成"。
+        detail: 补充描述信息。
+    """
+    icon_map = {
+        "启动": "[启动]",
+        "登录": "[登录]",
+        "搜索": "[搜索]",
+        "筛选": "[筛选]",
+        "加购": "[加购]",
+        "完成": "[完成]",
+        "失败": "[失败]",
+    }
+    icon = icon_map.get(status, f"[{status}]")
+
+    lines = [f"{icon} 进度更新 (Step {step})"]
+    if detail:
+        lines.append(detail)
+    return json.dumps({"text": "\n".join(lines)})
+
+
 def build_result_message(
     status: str,
     keyword: str,

@@ -3,16 +3,18 @@ Browser engine wrapper for Playwright with stealth anti-detection.
 
 Provides:
 - Chromium launch with headed/headless toggle
-- playwright-stealth injection
+- playwright-stealth injection + additional anti-detection
+- Cookie pre-loading for session reuse
 - Unified page context management
 - Timeout & retry strategies
 """
 
+import json
 import os
 import time
 import logging
-from typing import Callable, Optional
 from pathlib import Path
+from typing import Callable, Optional
 
 from playwright.sync_api import (
     sync_playwright,
@@ -36,6 +38,78 @@ DEFAULT_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/120.0.0.0 Safari/537.36"
 )
+
+# Cookie storage path
+COOKIE_DIR = Path(__file__).resolve().parent.parent / "assets" / "cookies"
+COOKIE_FILE = COOKIE_DIR / "taobao_cookies.json"
+
+# ── Stealth init script (injected before any page JS runs) ──────
+
+STEALTH_INIT_SCRIPT = """
+// Override navigator.webdriver (most common detection)
+Object.defineProperty(navigator, 'webdriver', {
+    get: () => undefined,
+    configurable: true,
+});
+
+// Simulate chrome.runtime
+window.chrome = {
+    runtime: {
+        connect: () => {},
+        sendMessage: () => {},
+        onMessage: { addListener: () => {} },
+        onConnect: { addListener: () => {} },
+        onInstalled: { addListener: () => {} },
+    },
+    loadTimes: () => {},
+    csi: () => {},
+    app: { isInstalled: false },
+};
+
+// Override permissions API to avoid automated-browser flag
+if (navigator.permissions) {
+    const origQuery = navigator.permissions.query.bind(navigator.permissions);
+    navigator.permissions.query = (desc) => {
+        if (desc.name === 'notifications') {
+            return Promise.resolve({ state: 'denied', onchange: null });
+        }
+        return origQuery(desc);
+    };
+}
+
+// Override plugins to appear as normal browser
+Object.defineProperty(navigator, 'plugins', {
+    get: () => [
+        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+        { name: 'Native Client', filename: 'internal-nacl-plugin' },
+    ],
+    configurable: true,
+});
+
+// Override languages
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['zh-CN', 'zh', 'en'],
+    configurable: true,
+});
+
+// WebGL vendor override
+try {
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(p) {
+        if (p === 37445) return 'Intel Inc.';
+        if (p === 37446) return 'Intel Iris OpenGL Engine';
+        return getParameter(p);
+    };
+} catch(e) {}
+
+// Override connection/rtt (avoid headless-like values)
+if (navigator.connection) {
+    Object.defineProperty(navigator.connection, 'rtt', {
+        get: () => 100,
+    });
+}
+"""
 
 
 class BrowserEngine:
@@ -101,6 +175,9 @@ class BrowserEngine:
         self._context = self._create_context()
         self._page = self._context.new_page()
         self._page.set_default_timeout(self.timeout)
+
+        # Inject stealth init script before any navigation
+        self._page.add_init_script(STEALTH_INIT_SCRIPT)
 
         logger.info("Browser started successfully.")
         return self._page
@@ -173,18 +250,46 @@ class BrowserEngine:
     def navigate(self, url: str, *, wait_until: str = "networkidle") -> bool:
         """Navigate to URL with timeout and retry.
 
+        Detects Taobao deny/block pages and attempts recovery.
+
         Args:
             url: Target URL.
             wait_until: Playwright waitUntil strategy.
 
         Returns:
-            True if navigation succeeded, False otherwise.
+            True if navigation succeeded and page is not a block page.
         """
-        return retry_on_failure(
-            func=lambda: self.page.goto(url, wait_until=wait_until),
-            max_retries=2,
-            retry_delay=2000,
-        )
+        for attempt in range(3):
+            ok = retry_on_failure(
+                func=lambda: self.page.goto(url, wait_until=wait_until),
+                max_retries=1,
+                retry_delay=2000,
+            )
+            if not ok:
+                continue
+
+            # Check if we landed on a Taobao deny/block page
+            if self._is_deny_page():
+                logger.warning(
+                    "Block page detected on attempt %d/3, retrying...", attempt + 1
+                )
+                time.sleep(2)
+                continue
+
+            return True
+
+        logger.error("Navigation failed after all retries (possibly blocked).")
+        return False
+
+    def _is_deny_page(self) -> bool:
+        """Check if the current page is a Taobao anti-bot block page."""
+        if not self._page:
+            return False
+        try:
+            url = self._page.url
+            return any(p in url for p in ["deny_h5.html", "punish", "rgv587_flag"])
+        except Exception:
+            return False
 
     def wait_for_page_ready(self):
         """Wait for page to reach a stable state."""
@@ -198,12 +303,25 @@ class BrowserEngine:
     def _launch_browser(self) -> Browser:
         """Launch Chromium with anti-detection args."""
         args = [
+            # Mask automation
             "--disable-blink-features=AutomationControlled",
             "--disable-features=IsolateOrigins,site-per-process",
             "--no-sandbox",
             "--disable-setuid-sandbox",
             "--disable-infobars",
+            # Window
             f"--window-size={self.viewport['width']},{self.viewport['height']}",
+            "--window-position=0,0",
+            # Disable unnecessary features
+            "--disable-notifications",
+            "--disable-popup-blocking",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-dev-shm-usage",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "--lang=zh-CN",
         ]
 
         return self._playwright.chromium.launch(
@@ -213,7 +331,7 @@ class BrowserEngine:
         )
 
     def _create_context(self) -> BrowserContext:
-        """Create a browser context with stealth config."""
+        """Create a browser context with stealth config and cookie pre-load."""
         context = self._browser.new_context(
             viewport=self.viewport,
             user_agent=self.user_agent,
@@ -222,10 +340,29 @@ class BrowserEngine:
             permissions=[],
         )
 
-        # Inject stealth scripts to mask automation fingerprints
+        # playwright-stealth library injection
         stealth.apply_stealth_sync(context)
 
+        # Pre-load saved cookies so the first request carries them
+        self._load_cookies(context)
+
         return context
+
+    # ── Cookie persistence ──────────────────────────────────────
+
+    def _load_cookies(self, context: BrowserContext):
+        """Load saved cookies into the browser context if they exist."""
+        if not COOKIE_FILE.exists():
+            logger.debug("No saved cookies to pre-load.")
+            return
+        try:
+            with open(COOKIE_FILE, "r") as f:
+                cookies = json.load(f)
+            if cookies:
+                context.add_cookies(cookies)
+                logger.info("Pre-loaded %d cookies.", len(cookies))
+        except Exception as e:
+            logger.warning("Failed to pre-load cookies: %s", e)
 
     @staticmethod
     def _default_screenshot_dir() -> str:
