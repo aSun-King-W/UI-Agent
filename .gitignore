@@ -1,0 +1,22 @@
+# 虚拟环境
+venv/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude
+.claude/
+
+# 截图等临时文件
+assets/screenshots/
