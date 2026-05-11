@@ -155,7 +155,7 @@ def _handle_navigate(page: Page, args: dict) -> str:
 
     for attempt in range(3):
         try:
-            page.goto(url, wait_until="networkidle")
+            page.goto(url, wait_until="load", timeout=60000)
         except Exception as exc:
             logger.warning("导航 attempt %d/3 失败: %s", attempt + 1, exc)
             time.sleep(2)
@@ -167,6 +167,23 @@ def _handle_navigate(page: Page, args: dict) -> str:
             logger.warning("风控拦截页 detected, retry %d/3", attempt + 1)
             time.sleep(3)
             continue
+
+        # 导航成功后尝试隐藏遮挡弹窗
+        try:
+            page.evaluate("""() => {
+                const selectors = [
+                    '.J_MIDDLEWARE_FRAME_WIDGET',
+                    '.middleware-frame',
+                    '.overlay', '.mask', '.popup', '.dialog',
+                ];
+                selectors.forEach(sel => {
+                    document.querySelectorAll(sel).forEach(el => {
+                        if (el) el.style.display = 'none';
+                    });
+                });
+            }""")
+        except Exception:
+            pass
 
         return f"已导航到 {url}"
 

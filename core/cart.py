@@ -60,8 +60,8 @@ class TaobaoCart:
         tab = None
         try:
             tab = self.page.context.new_page()
-            tab.goto(product.url, wait_until="networkidle", timeout=30000)
-            tab.wait_for_load_state("networkidle", timeout=15000)
+            tab.goto(product.url, wait_until="load", timeout=60000)
+            tab.wait_for_load_state("load", timeout=30000)
 
             self._dismiss_overlays(tab)
             self._select_sku(tab)

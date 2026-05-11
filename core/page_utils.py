@@ -66,7 +66,7 @@ class PageUtils:
         return state
 
     def _infer_page_mode(self) -> str:
-        """Infer what kind of page we're on from the URL and title."""
+        """Infer what kind of page we're on from the URL, title, and DOM state."""
         url = self.page.url.lower()
         title = self.page.title().lower()
 
@@ -79,9 +79,31 @@ class PageUtils:
         if "cart" in url or "cart" in title:
             return "cart"
         if "taobao.com" in url and ("/" == url.rstrip("/")[-1:] or "www.taobao" in url):
+            # 检查是否有登录弹窗浮层
+            if self._has_login_popup():
+                return "login"
             return "home"
 
         return "unknown"
+
+    def _has_login_popup(self) -> bool:
+        """检测当前页面是否有登录弹窗/浮层。"""
+        try:
+            popup_hints = [
+                "#J_LoginPopup",
+                ".login-popup",
+                ".login-dialog",
+                "#fm-login-id",            # 登录输入框出现说明弹窗打开了
+                ".fm-login",
+                "iframe[src*='login']",
+            ]
+            for sel in popup_hints:
+                el = self.page.query_selector(sel)
+                if el and el.is_visible():
+                    return True
+        except Exception:
+            pass
+        return False
 
     def _extract_interactive(self) -> List[Dict[str, str]]:
         """Extract visible interactive elements (buttons, links, inputs).
@@ -304,10 +326,10 @@ class PageUtils:
         within one interval, the page is considered stable.
         """
         try:
-            self.page.wait_for_load_state("networkidle", timeout=timeout)
+            self.page.wait_for_load_state("load", timeout=timeout)
             return True
         except PlaywrightTimeout:
-            logger.warning("Page did not reach networkidle within %dms.", timeout)
+            logger.warning("Page did not reach 'load' state within %dms.", timeout)
             return False
 
     def wait_for_text(self, text: str, timeout: int = 10000) -> bool:

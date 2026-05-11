@@ -126,7 +126,7 @@ class TestToolHandlers:
         handler = get_handler("navigate")
         result = handler(page, {"url": "https://www.taobao.com"})
         page.goto.assert_called_once_with(
-            "https://www.taobao.com", wait_until="networkidle"
+            "https://www.taobao.com", wait_until="load", timeout=60000
         )
         assert "已导航" in result
 

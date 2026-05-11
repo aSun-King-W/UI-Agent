@@ -138,7 +138,7 @@ class TaobaoFilter:
         try:
             # Open detail page in a new tab (preserves search-results state)
             tab = self.page.context.new_page()
-            tab.goto(product.url, wait_until="networkidle", timeout=30000)
+            tab.goto(product.url, wait_until="load", timeout=60000)
 
             rating = self._extract_rating_from_detail_page(tab)
 

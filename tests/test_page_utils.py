@@ -55,8 +55,20 @@ def test_infer_cart():
 
 def test_infer_home():
     page = make_page("https://www.taobao.com/")
+    page.query_selector.return_value = None  # 无登录弹窗
     utils = PageUtils(page)
     assert utils._infer_page_mode() == "home"
+
+
+def test_infer_home_with_login_popup():
+    """首页有登录弹窗时应识别为 login 模式。"""
+    page = make_page("https://www.taobao.com/")
+    # 模拟存在登录弹窗
+    mock_el = MagicMock()
+    mock_el.is_visible.return_value = True
+    page.query_selector.return_value = mock_el
+    utils = PageUtils(page)
+    assert utils._infer_page_mode() == "login"
 
 
 def test_infer_unknown():

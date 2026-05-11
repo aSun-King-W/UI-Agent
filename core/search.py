@@ -58,6 +58,61 @@ class TaobaoSearch:
         self.page = page
         self._last_keyword: Optional[str] = None
 
+    # ── Overlay dismissal ─────────────────────────────────────────
+
+    def _dismiss_overlays(self):
+        """关闭页面上可能遮挡点击交互的弹窗/浮层/Widget。
+
+        淘宝的 J_MIDDLEWARE_FRAME_WIDGET 或其他 overlay 会拦截
+        pointer events，导致 click 失败。尝试用 JS 直接移除或
+        点击关闭按钮。
+        """
+        # 方式 1: JS 直接隐藏已知的遮挡层
+        try:
+            self.page.evaluate("""() => {
+                const selectors = [
+                    '.J_MIDDLEWARE_FRAME_WIDGET',
+                    '.middleware-frame',
+                    '.overlay',
+                    '.mask',
+                    '.popup',
+                    '.dialog',
+                    '#J_SiteNavFloat',
+                ];
+                selectors.forEach(sel => {
+                    document.querySelectorAll(sel).forEach(el => {
+                        if (el) el.style.display = 'none';
+                    });
+                });
+            }""")
+        except Exception:
+            pass
+
+        # 方式 2: 点击常见的关闭按钮
+        close_selectors = [
+            ".close",
+            ".close-popup",
+            ".popup-close",
+            ".dialog-close",
+            "button.close",
+            "[class*='popup-close']",
+            "[class*='dialog-close']",
+            ".J_Close",
+        ]
+        for sel in close_selectors:
+            try:
+                el = self.page.wait_for_selector(sel, timeout=2000)
+                if el and el.is_visible():
+                    el.click()
+                    self._random_sleep(0.3, 0.8)
+            except Exception:
+                continue
+
+    def _random_sleep(self, lo: float, hi: float):
+        """短随机等待，模拟人类操作间隔。"""
+        import time, random
+        time.sleep(random.uniform(lo, hi))
+
     # ── Public API ───────────────────────────────────────────────
 
     def search(self, keyword: str) -> bool:
@@ -151,7 +206,7 @@ class TaobaoSearch:
                 el = self.page.wait_for_selector(sel, timeout=3000)
                 if el and el.is_visible():
                     el.click()
-                    self.page.wait_for_load_state("networkidle", timeout=15000)
+                    self.page.wait_for_load_state("load", timeout=20000)
                     logger.info("Navigated to next page.")
                     return True
             except PlaywrightTimeout:
@@ -180,7 +235,10 @@ class TaobaoSearch:
 
     def _search_via_homepage(self, keyword: str) -> bool:
         """Navigate to Taobao home, type keyword, click search."""
-        self.page.goto(TAOBAO_HOME, wait_until="networkidle")
+        self.page.goto(TAOBAO_HOME, wait_until="load", timeout=60000)
+
+        # 关闭可能出现的弹窗/遮挡层（如 J_MIDDLEWARE_FRAME_WIDGET）
+        self._dismiss_overlays()
 
         # Find search input — try multiple known selectors
         search_input = self._find_search_input()
@@ -199,13 +257,13 @@ class TaobaoSearch:
             # Fallback: press Enter
             self.page.keyboard.press("Enter")
 
-        self.page.wait_for_load_state("networkidle", timeout=20000)
+        self.page.wait_for_load_state("load", timeout=30000)
         return True
 
     def _search_via_direct_url(self, keyword: str) -> bool:
         """Navigate directly to the search results URL."""
         url = TAOBAO_SEARCH.format(keyword=quote(keyword))
-        self.page.goto(url, wait_until="networkidle")
+        self.page.goto(url, wait_until="load", timeout=60000)
         return True
 
     # ── Extraction strategies ────────────────────────────────────

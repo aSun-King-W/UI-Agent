@@ -134,7 +134,7 @@ class BrowserEngine:
         slow_mo: int = 100,
         viewport: Optional[dict] = None,
         user_agent: Optional[str] = None,
-        timeout: int = 30000,
+        timeout: int = 60000,
         screenshot_dir: Optional[str] = None,
     ):
         """
@@ -247,7 +247,7 @@ class BrowserEngine:
 
     # ── Navigation helpers ──────────────────────────────────────
 
-    def navigate(self, url: str, *, wait_until: str = "networkidle") -> bool:
+    def navigate(self, url: str, *, wait_until: str = "load") -> bool:
         """Navigate to URL with timeout and retry.
 
         Detects Taobao deny/block pages and attempts recovery.
@@ -294,7 +294,7 @@ class BrowserEngine:
     def wait_for_page_ready(self):
         """Wait for page to reach a stable state."""
         try:
-            self.page.wait_for_load_state("networkidle", timeout=15000)
+            self.page.wait_for_load_state("load", timeout=30000)
         except PlaywrightTimeout:
             logger.warning("Page load timeout, continuing anyway...")
 

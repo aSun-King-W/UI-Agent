@@ -23,3 +23,6 @@ assets/screenshots/
 
 # Cookie 持久化文件（含敏感 session 数据）
 assets/cookies/*.json
+
+# Chrome 用户数据目录（手动登录时生成）
+assets/chrome_profile/

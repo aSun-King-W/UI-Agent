@@ -64,7 +64,7 @@ class TaobaoLogin:
                 cookies = json.load(f)
             self.page.context.add_cookies(cookies)
 
-            self.page.goto(TAOBAO_HOME_URL, wait_until="networkidle")
+            self.page.goto(TAOBAO_HOME_URL, wait_until="load", timeout=60000)
             self._random_sleep(1, 2)
 
             if self._detect_logged_in():
@@ -79,20 +79,26 @@ class TaobaoLogin:
             return False
 
     def login(self, username: str, password: str) -> bool:
-        """Execute full Taobao password login flow.
+        """Execute Taobao login with multiple strategies.
 
-        Steps:
-        1. Navigate to login page
-        2. Switch from QR to password mode
-        3. Enter credentials with human-like typing
-        4. Submit and handle slider if present
-        5. Verify login success and persist cookies
+        策略 1: 如果页面上已有登录弹窗（如首页自动弹出），直接在弹窗中填写
+        策略 2: 导航到 login.taobao.com 执行标准登录流程
 
         Returns:
             True if login succeeded.
         """
         logger.info("Starting Taobao password login...")
 
+        # 策略 1: 先检查当前页面是否有登录浮层/弹窗
+        if self._try_popup_login(username, password):
+            self._handle_slider_if_present()
+            self._wait_login_complete()
+            if self.logged_in:
+                self._save_cookies()
+                return True
+            logger.info("Popup login seemed OK but verify failed, trying standalone page...")
+
+        # 策略 2: 导航到 login.taobao.com 标准登录
         try:
             self._go_to_login_page()
             self._switch_to_password_tab()
@@ -120,8 +126,113 @@ class TaobaoLogin:
 
     def _go_to_login_page(self):
         logger.info("Navigating to login page...")
-        self.page.goto(TAOBAO_LOGIN_URL, wait_until="networkidle")
+        self.page.goto(TAOBAO_LOGIN_URL, wait_until="load", timeout=60000)
         self._random_sleep(1, 2)
+
+    def _try_popup_login(self, username: str, password: str) -> bool:
+        """尝试在当前页面（首页）的登录浮层中直接填写凭据。
+
+        淘宝首页经常会自动弹出一个登录浮层/对话框。
+        这个方法检测该浮层并直接在上面操作，不跳转到 login.taobao.com。
+        """
+        logger.info("Checking for homepage login popup...")
+
+        # 先隐藏可能遮挡登录弹窗的 widget
+        try:
+            self.page.evaluate("""() => {
+                document.querySelectorAll('.J_MIDDLEWARE_FRAME_WIDGET').forEach(el => {
+                    el.style.display = 'none';
+                });
+            }""")
+        except Exception:
+            pass
+
+        # 检测是否有登录弹窗/浮层 — 找可见的登录表单或输入框
+        popup_detected = False
+        popup_selectors = [
+            "#J_LoginPopup",
+            ".login-popup",
+            ".login-dialog",
+            ".login-mask",
+            ".popup-login",
+            "#login_popup",
+            ".tb-login",
+            ".login-box",
+            "#J_SiteNavLogin",    # 顶部登录按钮区域
+            "iframe[src*='login']",
+        ]
+        for sel in popup_selectors:
+            try:
+                el = self.page.wait_for_selector(sel, timeout=3000)
+                if el and el.is_visible():
+                    popup_detected = True
+                    logger.info("Login popup detected: %s", sel)
+                    break
+            except PlaywrightTimeout:
+                continue
+
+        if not popup_detected:
+            logger.info("No login popup detected on current page.")
+            return False
+
+        # 试着点击"密码登录"标签（如果浮层默认是二维码登录）
+        self._switch_to_password_tab()
+
+        # 找用户名/手机号输入框
+        uname_input = self._find_input([
+            "#fm-login-id",
+            "input[name='fm-login-id']",
+            "input[placeholder*='手机号']",
+            "input[placeholder*='账号']",
+            "input[placeholder*='用户名']",
+            "input[type='text']",
+            "input[name='username']",
+            "input[name='loginId']",
+            "input[name='mobile']",
+        ])
+        if not uname_input:
+            logger.warning("Popup login: username input not found")
+            self._screenshot("popup_no_username_input")
+            return False
+
+        uname_input.click()
+        self._random_sleep(0.3, 0.8)
+        uname_input.fill("")
+        self._human_type(uname_input, username)
+        logger.info("Popup login: username entered")
+
+        self._random_sleep(0.5, 1.0)
+
+        # 找密码输入框
+        pwd_input = self._find_input([
+            "#fm-login-password",
+            "input[name='fm-login-password']",
+            "input[placeholder*='密码']",
+            "input[type='password']",
+        ])
+        if not pwd_input:
+            logger.warning("Popup login: password input not found")
+            return False
+
+        pwd_input.click()
+        self._random_sleep(0.3, 0.8)
+        pwd_input.fill("")
+        self._human_type(pwd_input, password)
+        logger.info("Popup login: password entered")
+
+        self._random_sleep(0.5, 1.0)
+
+        # 找并点击登录/提交按钮
+        try:
+            self._submit_login()
+        except RuntimeError:
+            # 如果找不到按钮，尝试按回车
+            logger.info("Popup login: no submit button found, pressing Enter")
+            self.page.keyboard.press("Enter")
+
+        self._random_sleep(2, 3)
+        logger.info("Popup login: submitted")
+        return True
 
     def _switch_to_password_tab(self):
         """Switch from QR code login to password/account login."""
@@ -260,12 +371,12 @@ class TaobaoLogin:
         logger.info("Waiting for login redirect...")
 
         # Wait for URL to leave login subdomain
-        self.page.wait_for_load_state("networkidle", timeout=20000)
+        self.page.wait_for_load_state("load", timeout=30000)
         self._random_sleep(2, 3)
 
         if not self._detect_logged_in():
             # Navigate to home explicitly and retry check
-            self.page.goto(TAOBAO_HOME_URL, wait_until="networkidle")
+            self.page.goto(TAOBAO_HOME_URL, wait_until="load", timeout=60000)
             self._random_sleep(1, 2)
             if not self._detect_logged_in():
                 raise RuntimeError(

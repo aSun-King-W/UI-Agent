@@ -27,7 +27,7 @@ def test_browser_engine_defaults():
     engine = BrowserEngine(headless=True, slow_mo=0)
     assert engine.headless is True
     assert engine.slow_mo == 0
-    assert engine.timeout == 30000
+    assert engine.timeout == 60000
 
 
 def test_screenshot_dir_resolution():
